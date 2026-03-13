@@ -64,12 +64,14 @@ runs:
     - name: Resolve context file
       if: inputs.context_repo != ''
       shell: bash
+      env:
+        REPO_NAME: ${{ github.event.repository.name }}
+        CONTEXT_FILE_PATH: ${{ inputs.context_file_path }}
       run: |
         CONTEXT_DIR=".claude-review-context"
-        REPO_NAME="${{ github.event.repository.name }}"
 
-        if [ -n "${{ inputs.context_file_path }}" ]; then
-          CONTEXT_FILE="${CONTEXT_DIR}/${{ inputs.context_file_path }}"
+        if [ -n "$CONTEXT_FILE_PATH" ]; then
+          CONTEXT_FILE="${CONTEXT_DIR}/${CONTEXT_FILE_PATH}"
         else
           # Auto-detect: look for Projects/<repo-name>.md
           CONTEXT_FILE="${CONTEXT_DIR}/Projects/${REPO_NAME}.md"

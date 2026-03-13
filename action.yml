@@ -1,0 +1,98 @@
+name: "Claude Code Review"
+description: "Claude-powered PR code review with confidence-based filtering. Reads project conventions from .claude/CLAUDE.md and optional context from a notes repo."
+author: "TheodorusMaximus"
+
+branding:
+  icon: "eye"
+  color: "orange"
+
+inputs:
+  anthropic_api_key:
+    description: "Anthropic API key for Claude"
+    required: true
+  github_token:
+    description: "GitHub token for posting reviews and reading PR data"
+    required: true
+  model:
+    description: "Claude model to use"
+    required: false
+    default: "claude-sonnet-4-20250514"
+  confidence_threshold:
+    description: "Minimum confidence score (0-100) to post an issue"
+    required: false
+    default: "80"
+  max_diff_size:
+    description: "Maximum diff size in bytes before skipping review"
+    required: false
+    default: "100000"
+  context_repo:
+    description: "Optional repo containing project notes (e.g., owner/obsidian-vault). Will look for a file matching the project name."
+    required: false
+    default: ""
+  context_repo_token:
+    description: "Token to access the context repo (if private). Defaults to github_token."
+    required: false
+    default: ""
+  context_file_path:
+    description: "Path within context_repo to read (e.g., Projects/MyProject.md). If empty, auto-detects from repo name."
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Install dependencies
+      shell: bash
+      run: pip install anthropic
+
+    - name: Checkout context repo
+      if: inputs.context_repo != ''
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.context_repo }}
+        token: ${{ inputs.context_repo_token || inputs.github_token }}
+        path: .claude-review-context
+        sparse-checkout: |
+          Projects/
+          Core/
+
+    - name: Resolve context file
+      if: inputs.context_repo != ''
+      shell: bash
+      run: |
+        CONTEXT_DIR=".claude-review-context"
+        REPO_NAME="${{ github.event.repository.name }}"
+
+        if [ -n "${{ inputs.context_file_path }}" ]; then
+          CONTEXT_FILE="${CONTEXT_DIR}/${{ inputs.context_file_path }}"
+        else
+          # Auto-detect: look for Projects/<repo-name>.md
+          CONTEXT_FILE="${CONTEXT_DIR}/Projects/${REPO_NAME}.md"
+        fi
+
+        if [ -f "$CONTEXT_FILE" ]; then
+          echo "Found context file: $CONTEXT_FILE"
+          cp "$CONTEXT_FILE" .github-review-vault-context.md
+          echo "VAULT_CONTEXT_FILE=.github-review-vault-context.md" >> "$GITHUB_ENV"
+        else
+          echo "No context file found at $CONTEXT_FILE — proceeding without vault context"
+          echo "VAULT_CONTEXT_FILE=" >> "$GITHUB_ENV"
+        fi
+
+    - name: Run Claude review
+      shell: bash
+      env:
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        REPO: ${{ github.repository }}
+        REVIEW_MODEL: ${{ inputs.model }}
+        CONFIDENCE_THRESHOLD: ${{ inputs.confidence_threshold }}
+        MAX_DIFF_SIZE: ${{ inputs.max_diff_size }}
+        VAULT_CONTEXT_FILE: ${{ env.VAULT_CONTEXT_FILE }}
+      run: python ${{ github.action_path }}/scripts/pr-review.py

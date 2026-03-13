@@ -16,7 +16,7 @@ inputs:
   model:
     description: "Claude model to use"
     required: false
-    default: "claude-sonnet-4-6-20250514"
+    default: "claude-sonnet-4-6"
   confidence_threshold:
     description: "Minimum confidence score (0-100) to post an issue"
     required: false

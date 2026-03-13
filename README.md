@@ -59,7 +59,7 @@ If you back up your Obsidian vault to a repo, the action can pull project-specif
 |-------|----------|---------|-------------|
 | `anthropic_api_key` | Yes | — | Anthropic API key |
 | `github_token` | Yes | — | GitHub token for API calls |
-| `model` | No | `claude-sonnet-4-6-20250514` | Claude model to use |
+| `model` | No | `claude-sonnet-4-6` | Claude model to use |
 | `confidence_threshold` | No | `80` | Min confidence (0-100) to post issues |
 | `max_diff_size` | No | `100000` | Max diff bytes before skipping |
 | `context_repo` | No | — | Repo with project notes (e.g., `user/vault`) |

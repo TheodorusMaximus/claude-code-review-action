@@ -12,7 +12,7 @@ Environment variables required:
   REPO                  — owner/repo (e.g., user/my-project)
 
 Optional:
-  REVIEW_MODEL          — Claude model (default: claude-sonnet-4-6-20250514)
+  REVIEW_MODEL          — Claude model (default: claude-sonnet-4-6)
   CONFIDENCE_THRESHOLD  — Minimum confidence to post (default: 80)
   MAX_DIFF_SIZE         — Max diff bytes before skipping (default: 100000)
   VAULT_CONTEXT_FILE    — Path to vault context file (from notes repo checkout)
@@ -33,7 +33,7 @@ import anthropic
 # Config
 # ---------------------------------------------------------------------------
 
-MODEL = os.environ.get("REVIEW_MODEL", "claude-sonnet-4-6-20250514")
+MODEL = os.environ.get("REVIEW_MODEL", "claude-sonnet-4-6")
 CONFIDENCE_THRESHOLD = int(os.environ.get("CONFIDENCE_THRESHOLD", "80"))
 MAX_DIFF_SIZE = int(os.environ.get("MAX_DIFF_SIZE", "100000"))
 PR_NUMBER = os.environ["PR_NUMBER"]

@@ -85,32 +85,12 @@ def get_pr_diff() -> str:
     return result.stdout
 
 
-def get_changed_files() -> list[dict]:
-    """Fetch list of changed files with patch info."""
-    files: list[dict] = []
-    page = 1
-    while True:
-        batch = gh_api(
-            f"/repos/{REPO}/pulls/{PR_NUMBER}/files?per_page=100&page={page}"
-        )
-        if not batch:
-            break
-        files.extend(batch)
-        if len(batch) < 100:
-            break
-        page += 1
-    return files
-
-
-def post_review(body: str, event: str, comments: list[dict]) -> None:
-    """Post a pull request review with inline comments."""
-    payload: dict = {"body": body, "event": event}
-    if comments:
-        payload["comments"] = comments
+def post_comment(body: str) -> None:
+    """Post a regular comment on the PR (enables conversation threads)."""
     gh_api(
-        f"/repos/{REPO}/pulls/{PR_NUMBER}/reviews",
+        f"/repos/{REPO}/issues/{PR_NUMBER}/comments",
         method="POST",
-        body=payload,
+        body={"body": body},
     )
 
 
@@ -264,19 +244,28 @@ def call_claude(system: str, user: str) -> dict:
 # Review posting
 # ---------------------------------------------------------------------------
 
-VERDICT_MAP = {
-    "approve": "APPROVE",
-    "request_changes": "REQUEST_CHANGES",
-    "comment": "COMMENT",
+VERDICT_EMOJI = {
+    "approve": "\u2705",
+    "request_changes": "\u274c",
+    "comment": "\u26a0\ufe0f",
 }
 
 
 def build_review_body(
-    result: dict, filtered_count: int, orphaned: list[dict] | None = None,
+    result: dict,
+    filtered_count: int,
+    file_count: int,
+    diff_size: int,
+    verdict: str,
 ) -> str:
-    """Build the review summary body, including any orphaned issues."""
-    parts = ["## Claude Code Review\n"]
+    """Build the review comment body — always posts something meaningful."""
+    emoji = VERDICT_EMOJI.get(verdict, "\U0001f50d")
+    parts = [f"## {emoji} Claude Code Review\n"]
     parts.append(result["summary"])
+
+    # Always show what was reviewed
+    diff_kb = f"{diff_size / 1024:.1f}KB"
+    parts.append(f"\n**Reviewed:** {file_count} file(s), {diff_kb} diff")
 
     issues = result.get("issues", [])
     if issues:
@@ -290,92 +279,28 @@ def build_review_body(
             counts.append(f"{important} important")
         if minor:
             counts.append(f"{minor} minor")
-        parts.append(f"\n**Issues:** {', '.join(counts)}")
+        parts.append(f"**Issues:** {', '.join(counts)}")
+
+        # All issues inline in the body
+        parts.append("\n### Issues\n")
+        for issue in issues:
+            parts.append(
+                f"- **{issue['severity'].upper()}** "
+                f"`{issue['file']}:{issue['line']}` "
+                f"({issue['confidence']}%): **{issue['title']}**\n"
+                f"  {issue['body']}\n"
+            )
+    else:
+        parts.append("**Issues:** None")
 
     if filtered_count:
-        parts.append(f"\n*({filtered_count} low-confidence suggestions omitted)*")
-
-    # Include orphaned issues (valid line not in diff) in the body
-    if orphaned:
-        parts.append("\n### Additional Issues (not on diff lines)\n")
-        for issue in orphaned:
-            parts.append(
-                f"- **{issue['severity'].upper()}** `{issue['file']}:{issue['line']}` "
-                f"({issue['confidence']}%): {issue['title']}\n  {issue['body']}\n"
-            )
+        parts.append(f"*({filtered_count} low-confidence suggestions omitted)*")
 
     parts.append(
         f"\n---\n*Reviewed by Claude ({MODEL}) "
-        f"| confidence >= {CONFIDENCE_THRESHOLD}%*"
+        f"| confidence \u2265 {CONFIDENCE_THRESHOLD}%*"
     )
     return "\n".join(parts)
-
-
-def parse_diff_lines(patch: str) -> set[int]:
-    """Extract valid line numbers from a unified diff patch.
-
-    Returns the set of new-side line numbers that appear in the diff,
-    which are valid targets for PR review inline comments.
-    """
-    valid_lines: set[int] = set()
-    if not patch:
-        return valid_lines
-
-    current_line = 0
-    for line in patch.split("\n"):
-        if line.startswith("@@"):
-            # Parse hunk header: @@ -old,count +new,count @@
-            import re
-            match = re.search(r"\+(\d+)", line)
-            if match:
-                current_line = int(match.group(1))
-            continue
-        if line.startswith("-"):
-            # Deleted line — not a valid target for new-side comments
-            continue
-        if line.startswith("+") or not line.startswith("\\"):
-            valid_lines.add(current_line)
-            current_line += 1
-
-    return valid_lines
-
-
-def format_inline_comments(
-    issues: list[dict], changed_files: list[dict]
-) -> tuple[list[dict], list[dict]]:
-    """Convert issues to GitHub review comments, validating against changed files.
-
-    Returns (valid_comments, orphaned_issues) where orphaned_issues have
-    line numbers outside the diff and should be included in the review body.
-    """
-    file_patches: dict[str, set[int]] = {}
-    for f in changed_files:
-        file_patches[f["filename"]] = parse_diff_lines(f.get("patch", ""))
-
-    comments = []
-    orphaned = []
-    for issue in issues:
-        if issue["file"] not in file_patches:
-            orphaned.append(issue)
-            continue
-
-        valid_lines = file_patches[issue["file"]]
-        body = (
-            f"**{issue['severity'].upper()}** "
-            f"({issue['confidence']}% confidence): "
-            f"{issue['title']}\n\n{issue['body']}"
-        )
-
-        if issue["line"] in valid_lines:
-            comments.append({
-                "path": issue["file"],
-                "line": issue["line"],
-                "body": body,
-            })
-        else:
-            orphaned.append(issue)
-
-    return comments, orphaned
 
 
 # ---------------------------------------------------------------------------
@@ -456,17 +381,15 @@ def main() -> None:
     else:
         verdict = "approve"
 
-    # Build and post review — validate line numbers against diff
-    changed_files = get_changed_files()
-    comments, orphaned = format_inline_comments(filtered_issues, changed_files)
-    if orphaned:
-        print(f"  {len(orphaned)} issues had invalid line numbers, moved to review body")
-    body = build_review_body(result, filtered_count, orphaned)
-    event = VERDICT_MAP[verdict]
+    # Count files in diff for the summary
+    file_count = diff.count("diff --git")
 
-    print(f"Posting review: {event} with {len(comments)} inline comments")
-    post_review(body, event, comments)
-    print("Review posted successfully.")
+    # Build and post comment
+    body = build_review_body(result, filtered_count, file_count, diff_size, verdict)
+
+    print(f"Posting comment: {verdict} with {len(filtered_issues)} issues")
+    post_comment(body)
+    print("Review comment posted successfully.")
 
 
 if __name__ == "__main__":
